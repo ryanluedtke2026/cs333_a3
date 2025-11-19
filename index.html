@@ -106,6 +106,14 @@ d3.csv("clean_bls_long_format.csv", d => ({
     .attr("height", height)
     .attr("viewBox", [0, 0, width, height]);
 
+  svg.append("text")
+  .attr("x", width / 2)
+  .attr("y", 18)
+  .attr("text-anchor", "middle")
+  .attr("font-size", "20px")
+  .attr("font-weight", "bold")
+  .text("Normalized Labor Market Metrics Over Time");
+
   svg.append("g")
     .attr("transform", `translate(0,${height - marginBottom})`)
     .call(d3.axisBottom(x).ticks(width / 80).tickSizeOuter(0))
@@ -153,6 +161,26 @@ d3.csv("clean_bls_long_format.csv", d => ({
     .attr("stroke", "white")
     .attr("stroke-width", 3)
     .text(d => d.key);
+
+  const legend = svg.append("g")
+  .attr("transform", `translate(${width - marginRight - 140}, ${marginTop + 10})`);
+
+  series.forEach((s, i) => {
+    const g = legend.append("g")
+      .attr("transform", `translate(0, ${i * 20})`);
+
+    g.append("rect")
+      .attr("width", 12)
+      .attr("height", 12)
+      .attr("fill", z(s.key));
+
+    g.append("text")
+      .attr("x", 18)
+      .attr("y", 10)
+      .attr("font-size", "12px")
+      .text(s.key);
+  });
+
 
   function update(date) {
     date = d3.utcDay.round(date);
