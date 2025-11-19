@@ -17,9 +17,7 @@
 
 <script>
 
-// ----------------------------------------------------------------
-// LOAD CSV (name, date, value)
-// ----------------------------------------------------------------
+// load CSV
 d3.csv("clean_bls_long_format.csv", d => ({
   name: d.name.trim(),
   date: new Date(d.date),
@@ -37,7 +35,7 @@ d3.csv("clean_bls_long_format.csv", d => ({
   console.log("RAW DATA:", raw);
 
 
-  // CLEAN bad values + invalid dates
+  // clean bad values
   filtered = filtered.filter(d =>
     d.value > 0 &&              
     d.date instanceof Date &&
@@ -45,13 +43,11 @@ d3.csv("clean_bls_long_format.csv", d => ({
   );
 
   console.log("FILTERED (name includes Total nonfarm Total US):", filtered);
-  
 
-
-  // Sort overall
+  // sort overall
   filtered.sort((a, b) => a.date - b.date);
 
-  // Map to chart structure
+  // map to chart structure
   const stocks = filtered.map(d => ({
     Symbol:
       d.name.includes("Hires") ? "Hires" :
@@ -63,10 +59,7 @@ d3.csv("clean_bls_long_format.csv", d => ({
   }));
   console.log("STOCKS (input to chart):", stocks);
 
-  // ----------------------------------------------------------------
-  // YOUR ORIGINAL CHART CODE — Unmodified Below This Point
-  // ----------------------------------------------------------------
-
+  // code inspired by https://observablehq.com/@d3/index-chart/2
   const width = 928;
   const height = 600;
   const marginTop = 20;
@@ -207,7 +200,7 @@ d3.csv("clean_bls_long_format.csv", d => ({
     update(x.invert(px));
   });
 
-});  // END CSV LOAD
+});
 
 </script>
 
