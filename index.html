@@ -5,6 +5,10 @@
   <title>D3 Normalized Line</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
+    #chart-left, #chart-right {
+      display: inline-block;
+      vertical-align: top;
+    }
     body {
       font-family: sans-serif;
     }
@@ -13,17 +17,20 @@
 
 <body>
 
-<div id="chart"></div>
+<div id="chart-left"></div>
+<div id="chart-right"> </div>
+<button id="toggle">Toggle</button>
 
 <script>
 
-// load CSV
+// load CSV. Convert row into name, date, and value (number)
 d3.csv("clean_bls_long_format.csv", d => ({
   name: d.name.trim(),
   date: new Date(d.date),
   value: +d.value
 })).then(raw => {
-
+//Filter down into just three metrics from all BLS series
+//Also if it contains the total nonfarm data
   let filtered = raw.filter(d =>
     d.name.includes("Total nonfarm Total US") &&
     (
@@ -35,29 +42,29 @@ d3.csv("clean_bls_long_format.csv", d => ({
   console.log("RAW DATA:", raw);
 
 
-  // clean bad values
+  // clean bad values: 0 or date is not valid
   filtered = filtered.filter(d =>
     d.value > 0 &&              
     d.date instanceof Date &&
     !isNaN(d.date.getTime())
   );
-
+ 
   console.log("FILTERED (name includes Total nonfarm Total US):", filtered);
 
   // sort overall
   filtered.sort((a, b) => a.date - b.date);
 
-  // map to chart structure
-  const stocks = filtered.map(d => ({
+  // map to chart structure for the rates
+  const rates = filtered.map(d => ({
     Symbol:
       d.name.includes("Hires") ? "Hires" :
       d.name.includes("Job openings") ? "Job openings" :
       d.name.includes("Total separations") ? "Total separations" :
       d.name,
     Date: d.date,
-    Close: d.value
+    Rate: d.value
   }));
-  console.log("STOCKS (input to chart):", stocks);
+  console.log("Rates (input to chart):", rates);
 
   // code inspired by https://observablehq.com/@d3/index-chart/2
   const width = 928;
@@ -67,33 +74,40 @@ d3.csv("clean_bls_long_format.csv", d => ({
   const marginBottom = 30;
   const marginLeft = 40;
 
+  //Ths creates a time scale from the min-date to the max-date
   const x = d3.scaleUtc()
-    .domain(d3.extent(stocks, d => d.Date))
+    .domain(d3.extent(rates, d => d.Date))
     .range([marginLeft, width - marginRight])
     .clamp(true);
 
-  const series = d3.groups(stocks, d => d.Symbol).map(([key, values]) => {
-    const v0 = values[0].Close;
+  //For each metric, take the first value, v0 and divide every value by v0
+  //Each line starts at 1 and shows relative change over time
+  const series = d3.groups(rates, d => d.Symbol).map(([key, values]) => {
+    const v0 = values[0].Rate;
     return {
       key,
-      values: values.map(({Date, Close}) => ({Date, value: Close / v0}))
+      values: values.map(({Date, Rate}) => ({Date, value: Rate / v0}))
     };
   });
 
+  //The y-Axis domain is using the max relative spread across the series
   const k = d3.max(series, ({values}) =>
     d3.max(values, d => d.value) / d3.min(values, d => d.value)
   );
 
+  //Using a log scale on the y-axis to normalize change
   const y = d3.scaleLog()
     .domain([1 / k, k])
     .rangeRound([height - marginBottom, marginTop]);
 
+  //Colors for all 3 rates
   const z = d3.scaleOrdinal(d3.schemeCategory10)
     .domain(series.map(d => d.key));
 
   const bisect = d3.bisector(d => d.Date).left;
 
-  const svg = d3.select("#chart")
+  //Buidl the title and SVG
+  const svg = d3.select("#chart-left")
     .append("svg")
     .attr("width", width)
     .attr("height", height)
@@ -107,6 +121,7 @@ d3.csv("clean_bls_long_format.csv", d => ({
   .attr("font-weight", "bold")
   .text("Normalized Labor Market Metrics Over Time");
 
+  //Draw X-Axis and Y-Axis. Make the Y-Axis have log tick marks
   svg.append("g")
     .attr("transform", `translate(0,${height - marginBottom})`)
     .call(d3.axisBottom(x).ticks(width / 80).tickSizeOuter(0))
@@ -120,6 +135,7 @@ d3.csv("clean_bls_long_format.csv", d => ({
       .attr("x2", width - marginLeft - marginRight))
     .call(g => g.select(".domain").remove());
 
+  //Make a line that moves with the animation and mouse interaction
   const rule = svg.append("line")
     .attr("y1", height)
     .attr("y2", 0)
@@ -129,11 +145,13 @@ d3.csv("clean_bls_long_format.csv", d => ({
     .x(d => x(d.Date))
     .y(d => y(d.value));
 
+  //draw the line (wrapper)
   const serie = svg.append("g")
     .selectAll("g")
     .data(series)
     .join("g");
 
+    //Do the math with key and values
   serie.append("path")
     .attr("fill", "none")
     .attr("stroke-width", 1.5)
@@ -142,6 +160,7 @@ d3.csv("clean_bls_long_format.csv", d => ({
     .attr("stroke", d => z(d.key))
     .attr("d", d => line(d.values));
 
+    //The label is at the last value of each line
   serie.append("text")
     .datum(d => ({
       key: d.key,
@@ -155,6 +174,51 @@ d3.csv("clean_bls_long_format.csv", d => ({
     .attr("stroke-width", 3)
     .text(d => d.key);
 
+  const svgRight = d3.select("#chart-right")
+    .append("svg")
+    .attr("width", width)
+    .attr("height", height);
+
+  const seriesRight = d3.groups(rates, d=>d.Symbol)
+    .map(([key, values]) => ({key, values}));
+  
+  const xRight = d3.scaleUtc()
+    .domain(d3.extent(rates, d=>d.Date))
+    .range([marginLeft, width - marginRight]);
+  
+  const yRight = d3.scaleLinear()
+    .domain([0, d3.max(rates, d=>d.Rate)]).nice()
+    .range([height - marginBottom, marginTop]);
+
+  const lineRight = d3.line()
+    .x(d=>xRight(d.Date))
+    .y(d=>yRight(d.Rate));
+
+  svgRight.append("g")
+    .attr("transform", `translate(${marginLeft}, 0)`)
+    .call(d3.axisLeft(yRight));
+  
+  svgRight.append("g")
+    .attr("transform", `translate(0, ${height - marginBottom})`)
+    .call(d3.axisBottom(xRight));
+
+  svgRight.append("g")
+    .selectAll("path")
+    .data(seriesRight)
+    .join("path")
+      .attr("fill", "none")
+      .attr("stroke-width", 1.5)
+      .attr("stroke-linejoin", "round")
+      .attr("stroke-linecap", "round")
+      .attr("stroke", d => z(d.key))
+      .attr("d", d => lineRight(d.values));
+
+  const ruleRight = svgRight.append("line")
+    .attr("y1", marginTop)
+    .attr("y2", height - marginBottom)
+    .attr("stroke", "black");
+
+    //small legend for each rate
   const legend = svg.append("g")
   .attr("transform", `translate(${width - marginRight - 140}, ${marginTop + 10})`);
 
@@ -174,11 +238,15 @@ d3.csv("clean_bls_long_format.csv", d => ({
       .text(s.key);
   });
 
-
+//This dynamically updates the index chart. This moves the vertical
+//rule to the date, finding the value on that day. Understanding how
+//much each line shifts vertically relative to y(1) 
   function update(date) {
     date = d3.utcDay.round(date);
 
     rule.attr("transform", `translate(${x(date)},0)`);
+
+    ruleRight.attr("transform",  `translate(${xRight(date)},0)`);
 
     serie.attr("transform", ({values}) => {
       const i = bisect(values, date, 0, values.length - 1);
@@ -186,7 +254,7 @@ d3.csv("clean_bls_long_format.csv", d => ({
       return `translate(0,${shift})`;
     });
   }
-
+  //Allow for animation from left to right
   d3.transition()
     .ease(d3.easeCubicOut)
     .duration(1500)
@@ -195,12 +263,14 @@ d3.csv("clean_bls_long_format.csv", d => ({
       return t => update(interp(t));
     });
 
+  //As the mouse moves, normalize the chart to that date
   svg.on("mousemove touchmove", function(event) {
     const [px] = d3.pointer(event, this);
     update(x.invert(px));
   });
 
 });
+
 
 </script>
 
