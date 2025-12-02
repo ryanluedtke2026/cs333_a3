@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>D3 Normalized Line</title>
+  <title>D3 Labor Market Metrics</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     body {
@@ -43,14 +43,10 @@
 
 <div style="text-align: center; margin-bottom: 20px;">
   <label for="industry-filter">Industry: </label>
-  <select id="industry-filter">
-    <option value="all">All Industries</option>
-  </select>
+  <select id="industry-filter"></select>
   
   <label for="region-filter" style="margin-left: 20px;">Region: </label>
-  <select id="region-filter">
-    <option value="all">All Regions</option>
-  </select>
+  <select id="region-filter"></select>
 </div>
 
 <div style="display: flex; justify-content: center;">
@@ -66,486 +62,319 @@
 
 <script>
 
-// load CSV. Convert row into name, date, and value (number)
+// Global variables for charts
+const width = 700;
+const height = 460;
+const marginTop = 20;
+const marginRight = 40;
+const marginBottom = 30;
+const marginLeft = 40;
+
+let rawData, filteredData;
+let ratesData = [], levelsData = [];
+let currentData = 'rates';
+let svgLeft, svgRight, xLeft, yLeft, zLeft, seriesLeft;
+let ruleLeft, ruleRight;
+
+// load CSV
 d3.csv("clean_bls_long_format_2.csv", d => ({
   name: d.name.trim(),
   date: new Date(d.date),
   value: +d.value
 })).then(raw => {
-  // Filter down into just three metrics from all BLS series
-  let originalFiltered = raw.filter(d =>
-    (
-      d.name.includes("Hires") ||
-      d.name.includes("Job openings") ||
-      d.name.includes("Total separations")
-    ) &&
+  //filter data so that date is always valid
+  rawData = raw.filter(d => 
     d.value > 0 &&              
     d.date instanceof Date &&
     !isNaN(d.date.getTime())
   );
-  
-  console.log("RAW DATA:", raw);
-  console.log("FILTERED (3 metrics):", originalFiltered);
 
-  // Sort overall
-  originalFiltered.sort((a, b) => a.date - b.date);
+  //industry and region dropdown categories
+  const industryCat = ["Total nonfarm", 
+    "Total private",
+    "Trade, transportation, and utilities",
+    "Construction", 
+    "Financial activities", 
+    "Information",
+    "Leisure and hospitality",
+    "Manufacturing",
+    "Mining and logging",
+    "Private education and health services",
+    "Professional and business services",
+    "Other services",
+    "Government",
+    "State and local",
+    "Federal"
+  ];
 
-  function Industry_category(name){
-    const match = name.match(/^(.+?)\s*\(/);
-    return match ? match[1].trim() : name;
-  }
+  const regionCat = ["US", "Midwest", "Northeast", "South", "West"];
 
-  function Region_category(name){
-    if (name.includes("(US)")) return "US";
-    if (name.includes("Midwest region")) return "Midwest";
-    if (name.includes("Northeast region")) return "Northeast";
-    if (name.includes("South region")) return "South";
-    if (name.includes("West region")) return "West";
-    return "Unknown";
-  }
+  // Populate industry and region dropdown
+  populateSelect("industry-filter", industryCat);
+  populateSelect("region-filter", regionCat);
 
-  const industry_cat = [...new Set(originalFiltered
-    .map(d => Industry_category(d.name))
-  )].sort();
-  
-  const region_cat = ["US", "Midwest", "Northeast", "South", "West"];
-  
-  console.log("FILTERED Industries:", industry_cat);
-  console.log("FILTERED Regions:", region_cat);
+  // Initial selection
+  document.getElementById("industry-filter").value = "Total nonfarm";
+  document.getElementById("region-filter").value = "US";
 
-  // Populate industry dropdown
-  const industrySelect = document.getElementById("industry-filter");
-  industry_cat.forEach(ind => {
-    const option = document.createElement("option");
-    option.value = ind;
-    option.textContent = ind;
-    industrySelect.appendChild(option);
+  // Event listeners -- for interaction on the buttons
+  document.getElementById("industry-filter").addEventListener("change", () => {
+    if (document.getElementById("industry-filter").value !== "all") 
+      document.getElementById("region-filter").value = "US";
+    filterData();
   });
 
-  // Populate region dropdown
-  const regionSelect = document.getElementById("region-filter");
-  region_cat.forEach(reg => {
-    const option = document.createElement("option");
-    option.value = reg;
-    option.textContent = reg;
-    regionSelect.appendChild(option);
+  document.getElementById("region-filter").addEventListener("change", () => {
+    const region = document.getElementById("region-filter").value;
+    if (region !== "all" && region !== "US") 
+      document.getElementById("industry-filter").value = "Total nonfarm";
+    filterData();
   });
 
-  // Global variables for charts
-  let ratesData, levelsData;
-  let rates, series, x, y, z, svg, rule, serie, svgRight, ruleRight, currentData;
-  const width = 700;
-  const height = 600/1.3;
-  const marginTop = 20;
-  const marginRight = 40;
-  const marginBottom = 30;
-  const marginLeft = 40;
-  const bisect = d3.bisector(d => d.Date).left;
-  currentData = 'rates';
+  // Initial filter and chart
+  filterData();
+  document.getElementById('button_rates').classList.add('active');
+});
 
-  function draw_charts(){
-    
-    rates = ratesData;
-    //Draw both chart left and right and clear existing data
-    d3.select("#chart-left").selectAll("*").remove();
-    d3.select("#chart-right").selectAll("*").remove();
+// Get industry and get region functions
+function getIndustry(name){
+  const match = name.match(/^(.+?) Total US/);
+  return match ? match[1].trim() : name;
+}
 
-    if (rates.length === 0) {
-      d3.select("#chart-left").append("text")
-        .attr("x", width / 2)
-        .attr("y", height / 2)
-        .attr("text-anchor", "middle")
-        .text("No data available for this selection");
-      return;
+function getRegion(name){
+  if (name.includes("Total US")) return "US";
+  if (name.includes("Midwest region")) return "Midwest";
+  if (name.includes("Northeast region")) return "Northeast";
+  if (name.includes("South region")) return "South";
+  if (name.includes("West region")) return "West";
+  return "Unknown";
+}
+
+function populateSelect(id, arr){
+  const select = document.getElementById(id);
+  arr.forEach(item => {
+    const option = document.createElement("option");
+    option.value = item;
+    option.textContent = item;
+    select.appendChild(option);
+  });
+}
+
+// Filter function
+function filterData(){
+  //Filtering by selected dropdown
+  const selectedIndustry = document.getElementById("industry-filter").value;
+  const selectedRegion = document.getElementById("region-filter").value;
+
+  filteredData = rawData.filter(d => {
+    const industryMatch = selectedIndustry === "all" || getIndustry(d.name) === selectedIndustry;
+    const regionMatch = selectedRegion === "all" || getRegion(d.name) === selectedRegion;
+    if (selectedRegion !== "all" && selectedRegion !== "US") {
+      return d.name.includes("Total nonfarm") && regionMatch;
+    } else {
+      return industryMatch && getRegion(d.name) === "US";
     }
+  });
 
-    //This creates a time scale from the min-date to the max-date
-    x = d3.scaleUtc()
-      .domain(d3.extent(rates, d => d.Date))
-      .range([marginLeft, width - marginRight])
-      .clamp(true);
+  // Prepare ratesData and levelsData
+  ratesData = filteredData.filter(d => /rate/i.test(d.name)).map(d => ({
+    Symbol: d.name.includes("Hires") ? "Hires" : d.name.includes("Job openings") ? "Job openings" : "Total separations",
+    Date: d.date,
+    Rate: d.value
+  }));
 
-    //Normalize each series
-    series = d3.groups(rates, d => d.Symbol).map(([key, values]) => {
-      const v0 = values[0].Rate;
-      return {
-        key,
-        values: values.map(({Date, Rate}) => ({Date, value: Rate / v0}))
-      };
-    });
+  levelsData = filteredData.filter(d => /level/i.test(d.name)).map(d => ({
+    Symbol: d.name.includes("Hires") ? "Hires" : d.name.includes("Job openings") ? "Job openings" : "Total separations",
+    Date: d.date,
+    Rate: d.value
+  }));
 
-    //K Constant for Left-Chart
-    const k = d3.max(series, ({values}) =>
-      d3.max(values, d => d.value) / d3.min(values, d => d.value)
-    );
+  // Draw charts
+  drawCharts();
+}
 
-    //Define the y-Axis of the Left-Chart
-    y = d3.scaleLog()
-      .domain([1 / k, k])
-      .rangeRound([height - marginBottom, marginTop]);
+// Draw charts
+function drawCharts(){
+  drawLeftChart();
+  drawRightChart(currentData === 'rates' ? ratesData : levelsData);
+}
 
-    //Colors for all 3 rates: both left and right chart
-    z = d3.scaleOrdinal(d3.schemeCategory10)
-      .domain(series.map(d => d.key));
+//Draw the left chart
+function drawLeftChart(){
+  d3.select("#chart-left").selectAll("*").remove();
 
-    //Draw the left chart
-    svg = d3.select("#chart-left")
-      .append("svg")
-      .attr("width", width)
-      .attr("height", height)
-      .attr("viewBox", [0, 0, width, height]);
-
-    //create title for left-chart
-    svg.append("text")
+  if (ratesData.length === 0) {
+    d3.select("#chart-left").append("text")
       .attr("x", width / 2)
-      .attr("y", 18)
+      .attr("y", height / 2)
       .attr("text-anchor", "middle")
-      .attr("font-size", "20px")
-      .attr("font-weight", "bold")
-      .text("Normalized Labor Market Metrics Over Time");
+      .text("No data available for this selection");
+    return;
+  }
 
-    //Tick marks on X-Axis (left-chart)
-    svg.append("g")
-      .attr("transform", `translate(0,${height - marginBottom})`)
-      .call(d3.axisBottom(x).ticks(width / 80).tickSizeOuter(0))
-      .call(g => g.select(".domain").remove());
-
-    //From the example code. Create light grey lines for axis
-    svg.append("g")
-      .attr("transform", `translate(${marginLeft},0)`)
-      .call(d3.axisLeft(y).ticks(null, x => +x.toFixed(6) + "×"))
-      .call(g => g.selectAll(".tick line").clone()
-        .attr("stroke-opacity", d => d === 1 ? null : 0.2)
-        .attr("x2", width - marginLeft - marginRight))
-      .call(g => g.select(".domain").remove());
-
-    //Make a line that moves with the animation and mouse interaction
-    rule = svg.append("line")
-      .attr("y1", height)
-      .attr("y2", 0)
-      .attr("stroke", "black");
-
-    const line = d3.line()
-      .x(d => x(d.Date))
-      .y(d => y(d.value));
-
-    //draw the line 
-    serie = svg.append("g")
-      .selectAll("g")
-      .data(series)
-      .join("g");
-
-    //Do the math with key and values
-    serie.append("path")
-      .attr("fill", "none")
-      .attr("stroke-width", 1.5)
-      .attr("stroke-linejoin", "round")
-      .attr("stroke-linecap", "round")
-      .attr("stroke", d => z(d.key))
-      .attr("d", d => line(d.values));
-
-    //Label for the moving line
-    serie.append("text")
-      .datum(d => ({
-        key: d.key,
-        value: d.values[d.values.length - 1].value
-      }))
-      .attr("x", x.range()[1] + 3)
-      .attr("y", d => y(d.value))
-      .attr("dy", "0.35em")
-      .attr("fill", d => z(d.key))
-      .attr("stroke", "white")
-      .attr("stroke-width", 3)
-      .text(d => d.key);
-
-  svgRight = d3.select("#chart-right")
+  // Draw the left chart
+  svgLeft = d3.select("#chart-left")
     .append("svg")
     .attr("width", width)
     .attr("height", height);
 
-  const seriesRight = d3.groups(rates, d=>d.Symbol)
-    .map(([key, values]) => ({key, values}));
-  
-  const xRight = d3.scaleUtc()
-    .domain(d3.extent(rates, d=>d.Date))
+  // Time scale
+  xLeft = d3.scaleUtc()
+    .domain(d3.extent(ratesData, d => d.Date))
     .range([marginLeft, width - marginRight]);
-  
-  const yRight = d3.scaleLinear()
-    .domain([0, d3.max(rates, d=>d.Rate)]).nice()
+
+  // Normalize each series
+  seriesLeft = d3.groups(ratesData, d => d.Symbol).map(([key, values]) => {
+    const v0 = values[0].Rate || 1;  // safeguard against 0
+    return {
+      key,
+      values: values.map(({Date, Rate}) => ({Date, value: Rate / v0}))
+    };
+  });
+
+  const k = d3.max(seriesLeft, ({values}) =>
+    d3.max(values, d => d.value) / d3.min(values, d => d.value)
+  );
+
+  yLeft = d3.scaleLog()
+    .domain([1 / k, k])
     .range([height - marginBottom, marginTop]);
 
-  const lineRight = d3.line()
-    .x(d=>xRight(d.Date))
-    .y(d=>yRight(d.Rate));
+  zLeft = d3.scaleOrdinal(d3.schemeCategory10)
+    .domain(seriesLeft.map(d => d.key));
 
-  svgRight.append("g")
-    .attr("transform", `translate(${marginLeft}, 0)`)
-    .call(d3.axisLeft(yRight));
-  
-  svgRight.append("g")
-    .attr("transform", `translate(0, ${height - marginBottom})`)
-    .call(d3.axisBottom(xRight));
+  // Left chart title
+  svgLeft.append("text")
+    .attr("x", width / 2)
+    .attr("y", 18)
+    .attr("text-anchor", "middle")
+    .attr("font-size", "20px")
+    .attr("font-weight", "bold")
+    .text("Normalized Labor Market Metrics Over Time");
 
-  svgRight.append("g")
-    .selectAll("path")
-    .data(seriesRight)
-    .join("path")
-      .attr("fill", "none")
-      .attr("stroke-width", 1.5)
-      .attr("stroke-linejoin", "round")
-      .attr("stroke-linecap", "round")
-      .attr("stroke", d => z(d.key))
-      .attr("d", d => lineRight(d.values));
+  // X-Axis
+  svgLeft.append("g")
+    .attr("transform", `translate(0,${height - marginBottom})`)
+    .call(d3.axisBottom(xLeft).ticks(width / 80).tickSizeOuter(0))
+    .call(g => g.select(".domain").remove());
 
-  const ruleRight = svgRight.append("line")
+  // Y-Axis
+  svgLeft.append("g")
+    .attr("transform", `translate(${marginLeft},0)`)
+    .call(d3.axisLeft(yLeft))
+    .call(g => g.selectAll(".tick line").clone()
+      .attr("stroke-opacity", 0.2)
+      .attr("x2", width - marginLeft - marginRight))
+    .call(g => g.select(".domain").remove());
+
+  const line = d3.line()
+    .x(d => xLeft(d.Date))
+    .y(d => yLeft(d.value));
+
+  // Draw each series
+  const serieG = svgLeft.append("g")
+    .selectAll("g")
+    .data(seriesLeft)
+    .join("g");
+
+  serieG.append("path")
+    .attr("fill", "none")
+    .attr("stroke-width", 1.5)
+    .attr("stroke-linejoin", "round")
+    .attr("stroke-linecap", "round")
+    .attr("stroke", d => zLeft(d.key))
+    .attr("d", d => line(d.values));
+
+  // Legend
+  const legend = svgLeft.append("g")
+    .attr("transform", `translate(${marginLeft+10},${marginTop+10})`);
+  seriesLeft.forEach((s,i)=>{
+    const g = legend.append("g")
+      .attr("transform", `translate(0,${i*20})`);
+    g.append("rect").attr("width",12).attr("height",12).attr("fill", zLeft(s.key));
+    g.append("text").attr("x",18).attr("y",10).attr("font-size","12px").text(s.key);
+  });
+
+  // Vertical mouse line
+  ruleLeft = svgLeft.append("line")
     .attr("y1", marginTop)
     .attr("y2", height - marginBottom)
     .attr("stroke", "black");
 
-    //small legend for each rate
-    const legendLeft = svg.append("g")
-      .attr("transform", `translate(${marginLeft + 10}, ${marginTop + 10})`);
+  // Mouse interaction to show normalized line
+  svgLeft.on("mousemove touchmove", function(event){
+    const [px] = d3.pointer(event, this);
+    const date = xLeft.invert(px);
 
-    series.forEach((s, i) => {
-      const g = legendLeft.append("g")
-        .attr("transform", `translate(0, ${i * 20})`);
+    ruleLeft.attr("x1", xLeft(date)).attr("x2", xLeft(date));
 
-      g.append("rect")
-        .attr("width", 12)
-        .attr("height", 12)
-        .attr("fill", z(s.key));
-
-      g.append("text")
-        .attr("x", 18)
-        .attr("y", 10)
-        .attr("font-size", "12px")
-        .text(s.key);
-    });
-
-    //Draw Right Chart
-    svgRight = d3.select("#chart-right")
-      .append("svg")
-      .attr("width", width)
-      .attr("height", height);
-
-    //call our function for drawing the right chart with current data
-    ruleRight = drawRightChart(currentData === 'rates' ? ratesData : levelsData);
-
-    //Animation
-    d3.transition()
-      .ease(d3.easeCubicOut)
-      .duration(1500)
-      .tween("date", () => {
-        const interp = d3.interpolateDate(x.domain()[1], x.domain()[0]);
-        return t => update(interp(t));
-      });
-
-    //As the mouse moves, normalize the chart to that date
-    svg.on("mousemove touchmove", function(event) {
-      const [px] = d3.pointer(event, this);
-      update(x.invert(px));
-    });
-  }
-
-  function drawRightChart(data){
-    svgRight.selectAll("*").remove();
-
-    if (data.length === 0) {
-      svgRight.append("text")
-        .attr("x", width / 2)
-        .attr("y", height / 2)
-        .attr("text-anchor", "middle")
-        .text("No data available");
-      return null;
-    }
-
-    const seriesRight = d3.groups(data, d=>d.Symbol)
-      .map(([key, values]) => ({key, values}));
-    
-    const xRight = d3.scaleUtc()
-      .domain(d3.extent(data, d=>d.Date))
-      .range([marginLeft, width - marginRight]);
-    
-    const yRight = d3.scaleLinear()
-      .domain([0, d3.max(data, d=>d.Rate)]).nice()
-      .range([height - marginBottom, marginTop]);
-
-    const lineRight = d3.line()
-      .x(d=>xRight(d.Date))
-      .y(d=>yRight(d.Rate));
-
-    const legendRight = svgRight.append("g")
-      .attr("transform", `translate(${marginLeft + 10}, ${marginTop + 40})`);
-
-    seriesRight.forEach((s, i) => {
-      const g = legendRight.append("g")
-        .attr("transform", `translate(0, ${i * 20})`);
-
-      g.append("rect")
-        .attr("width", 12)
-        .attr("height", 12)
-        .attr("fill", z(s.key));
-
-      g.append("text")
-        .attr("x", 18)
-        .attr("y", 10)
-        .attr("font-size", "12px")
-        .text(s.key);
-    });
-
-    //Title
-    svgRight.append("text")
-      .attr("x", width / 2)
-      .attr("y", 18)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "16px")
-      .attr("font-weight", "bold")
-      .text(currentData === 'rates' ? "Rates" : "Actual Values");
-
-    //Y-Axis 
-    svgRight.append("g")
-      .attr("transform", `translate(${marginLeft}, 0)`)
-      .call(d3.axisLeft(yRight));
-    
-    //X-Axis
-    svgRight.append("g")
-      .attr("transform", `translate(0, ${height - marginBottom})`)
-      .call(d3.axisBottom(xRight).ticks(width/80).tickSizeOuter(0));
-
-    svgRight.append("g")
-      .selectAll("path")
-      .data(seriesRight)
-      .join("path")
-        .attr("fill", "none")
-        .attr("stroke-width", 1.5)
-        .attr("stroke-linejoin", "round")
-        .attr("stroke-linecap", "round")
-        .attr("stroke", d => z(d.key))
-        .attr("d", d => lineRight(d.values));
-
-    const ruleRight = svgRight.append("line")
-      .attr("y1", marginTop)
-      .attr("y2", height - marginBottom)
-      .attr("stroke", "black");
-
-    svgRight.on("mousemove touchmove", function(event) {
-      const [px] = d3.pointer(event, this);
-      update(xRight.invert(px));
-    });
-    return ruleRight;
-  }
-
-  function update(date) {
-    date = d3.utcDay.round(date);
-
-    rule.attr("transform", `translate(${x(date)},0)`);
-
-    if (ruleRight) {
-      ruleRight.attr("transform", `translate(${xRight(date)},0)`);
-    }
-
-    serie.attr("transform", ({values}) => {
-      const i = bisect(values, date, 0, values.length - 1);
-      const shift = y(1) - y(values[i].value / values[0].value);
-      return `translate(0,${shift})`;
-    });
-  }
- 
-  // Button click handler
-  window.updateDataset = function(type) {
-    currentData = type;
-    
-    // Update button styles
-    document.getElementById('button_rates').classList.toggle('active', type === 'rates');
-    document.getElementById('button_actual').classList.toggle('active', type === 'actual');
-    
-    // Redraw right chart with new data
-    const newData = type === 'rates' ? ratesData : levelsData;
-    ruleRight = drawRightChart(newData);
-  };
-
-  // Filter function
-  window.filterData = function() {
-    const selectedIndustry = document.getElementById("industry-filter").value;
-    const selectedRegion = document.getElementById("region-filter").value;
-    
-    let filtered;
-
-    if (selectedRegion !== "all" && selectedRegion !== "US") {
-      // REGIONAL MODE (Northeast, West, etc.)
-      // Region data ONLY exists for Total nonfarm
-      filtered = originalFiltered.filter(d =>
-        d.name.includes("Total nonfarm") &&
-        d.name.includes(selectedRegion + " region")
-      );
-    } else {
-      // INDUSTRY MODE (Manufacturing, etc.)
-      // Industry data ONLY exists for Total US
-      filtered = originalFiltered.filter(d => {
-        const matchesIndustry = (selectedIndustry === "all" || 
-                                 Industry_category(d.name) === selectedIndustry);
-        const matchesUS = d.name.includes("(US)");
-        return matchesIndustry && matchesUS;
-      });
-    }
-
-    console.log("Filtered length:", filtered.length);
-    console.log("Sample filtered data:", filtered.slice(0, 3));
-
-    // REBUILD DATASETS
-    ratesData = filtered
-      .filter(d => d.name.includes("rate") || d.name.includes("Rate"))
-      .map(d => ({
-        Symbol:
-          d.name.includes("Hires") ? "Hires" :
-          d.name.includes("Job openings") ? "Job openings" :
-          "Total separations",
-        Date: d.date,
-        Rate: d.value
-      }));
-
-    levelsData = filtered
-      .filter(d => d.name.includes("level") || d.name.includes("Level"))
-      .map(d => ({
-        Symbol:
-          d.name.includes("Hires") ? "Hires" :
-          d.name.includes("Job openings") ? "Job openings" :
-          "Total separations",
-        Date: d.date,
-        Rate: d.value
-      }));
-
-    console.log("Rates data length:", ratesData.length);
-    console.log("Levels data length:", levelsData.length);
-
-    draw_charts();
-  };
-
-  // When selecting an industry, reset region to "US"
-  document.getElementById("industry-filter").addEventListener("change", function() {
-    if (this.value !== "all") {
-      document.getElementById("region-filter").value = "US";
-    }
-    filterData();
+    // Move each line's last label vertically (optional)
+    serieG.selectAll("text")
+      .data(seriesLeft)
+      .join("text")
+      .attr("x", xLeft.range()[1] + 3)
+      .attr("y", d => {
+        const bisect = d3.bisector(d => d.Date).left;
+        const i = bisect(d.values, date, 0, d.values.length - 1);
+        return yLeft(d.values[i].value);
+      })
+      .text(d => d.key)
+      .attr("fill", d => zLeft(d.key))
+      .attr("stroke", "white")
+      .attr("stroke-width", 3)
+      .attr("dy", "0.35em");
   });
+}
 
-  // When selecting a region, reset industry to "all"
-  document.getElementById("region-filter").addEventListener("change", function() {
-    if (this.value !== "all" && this.value !== "US") {
-      document.getElementById("industry-filter").value = "all";
-    }
-    filterData();
-  });
 
-  // Initial setup - filter to Total Nonfarm US
-  document.getElementById("industry-filter").value = "Total nonfarm";
-  document.getElementById("region-filter").value = "US";
-  
-  // Initial filter and chart creation
-  filterData();
-  document.getElementById('button_rates').classList.add('active');
+// Right chart
+function drawRightChart(data){
+  d3.select("#chart-right").selectAll("*").remove();
+  if(data.length === 0){
+    svgRight = d3.select("#chart-right").append("svg")
+      .attr("width", width).attr("height", height)
+      .append("text")
+      .attr("x", width / 2).attr("y", height / 2).attr("text-anchor", "middle")
+      .text("No data available");
+    return;
+  }
 
-});
+  svgRight = d3.select("#chart-right").append("svg").attr("width", width).attr("height", height);
+
+  xRight = d3.scaleUtc().domain(d3.extent(data, d=>d.Date)).range([marginLeft, width - marginRight]);
+  yRight = d3.scaleLinear().domain([0, d3.max(data,d=>d.Rate)]).nice().range([height-marginBottom, marginTop]);
+  zRight = d3.scaleOrdinal(d3.schemeCategory10).domain(data.map(d=>d.Symbol));
+
+  const lineRight = d3.line().x(d=>xRight(d.Date)).y(d=>yRight(d.Rate));
+
+  const seriesRight = d3.groups(data, d=>d.Symbol).map(([key,values])=>({key, values}));
+
+  // Axes
+  svgRight.append("g").attr("transform", `translate(${marginLeft},0)`).call(d3.axisLeft(yRight));
+  svgRight.append("g").attr("transform", `translate(0,${height-marginBottom})`).call(d3.axisBottom(xRight).ticks(width/80).tickSizeOuter(0));
+
+  // Lines
+  svgRight.append("g").selectAll("path")
+    .data(seriesRight).join("path")
+    .attr("fill","none")
+    .attr("stroke-width",1.5)
+    .attr("stroke-linejoin","round")
+    .attr("stroke-linecap","round")
+    .attr("stroke", d=>zRight(d.key))
+    .attr("d", d=>lineRight(d.values));
+
+  // Vertical line
+  ruleRight = svgRight.append("line").attr("y1", marginTop).attr("y2", height-marginBottom).attr("stroke","black");
+}
+
+// Dataset toggle
+function updateDataset(type){
+  currentData = type;
+  document.getElementById('button_rates').classList.toggle('active', type==='rates');
+  document.getElementById('button_actual').classList.toggle('active', type==='actual');
+  drawRightChart(type==='rates'?ratesData:levelsData);
+}
 
 </script>
 
