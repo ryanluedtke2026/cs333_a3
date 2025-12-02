@@ -62,7 +62,7 @@
 
 <script>
 
-// Global variables for charts
+// Global variables 
 const width = 700;
 const height = 460;
 const marginTop = 20;
@@ -75,6 +75,7 @@ let ratesData = [], levelsData = [];
 let currentData = 'rates';
 let svgLeft, svgRight, xLeft, yLeft, zLeft, seriesLeft;
 let ruleLeft, ruleRight;
+let bisect; 
 
 // load CSV
 d3.csv("clean_bls_long_format_2.csv", d => ({
@@ -82,6 +83,7 @@ d3.csv("clean_bls_long_format_2.csv", d => ({
   date: new Date(d.date),
   value: +d.value
 })).then(raw => {
+
   //filter data so that date is always valid
   rawData = raw.filter(d => 
     d.value > 0 &&              
@@ -190,11 +192,10 @@ function filterData(){
     Rate: d.value
   }));
 
-  // Draw charts
   drawCharts();
 }
 
-// Draw charts
+// Function: Draw charts, left and right(rates or actual selected?)
 function drawCharts(){
   drawLeftChart();
   drawRightChart(currentData === 'rates' ? ratesData : levelsData);
@@ -213,12 +214,6 @@ function drawLeftChart(){
     return;
   }
 
-  // Draw the left chart
-  svgLeft = d3.select("#chart-left")
-    .append("svg")
-    .attr("width", width)
-    .attr("height", height);
-
   // Time scale
   xLeft = d3.scaleUtc()
     .domain(d3.extent(ratesData, d => d.Date))
@@ -226,9 +221,10 @@ function drawLeftChart(){
 
   // Normalize each series
   seriesLeft = d3.groups(ratesData, d => d.Symbol).map(([key, values]) => {
-    const v0 = values[0].Rate || 1;  // safeguard against 0
+    const v0 = values[0].Rate || 1; 
     return {
       key,
+      // Store the normalized value
       values: values.map(({Date, Rate}) => ({Date, value: Rate / v0}))
     };
   });
@@ -243,6 +239,13 @@ function drawLeftChart(){
 
   zLeft = d3.scaleOrdinal(d3.schemeCategory10)
     .domain(seriesLeft.map(d => d.key));
+  
+  // Draw the left chart
+  svgLeft = d3.select("#chart-left")
+    .append("svg")
+    .attr("width", width)
+    .attr("height", height)
+    .attr("viewBox", [0, 0, width, height]);
 
   // Left chart title
   svgLeft.append("text")
@@ -253,18 +256,18 @@ function drawLeftChart(){
     .attr("font-weight", "bold")
     .text("Normalized Labor Market Metrics Over Time");
 
-  // X-Axis
+  //Tick marks on X-Axis (left-chart)
   svgLeft.append("g")
     .attr("transform", `translate(0,${height - marginBottom})`)
     .call(d3.axisBottom(xLeft).ticks(width / 80).tickSizeOuter(0))
     .call(g => g.select(".domain").remove());
 
-  // Y-Axis
+  //From the example code. Create light grey lines for axis
   svgLeft.append("g")
     .attr("transform", `translate(${marginLeft},0)`)
-    .call(d3.axisLeft(yLeft))
+    .call(d3.axisLeft(yLeft).ticks(null, x => +x.toFixed(6) + "×")) 
     .call(g => g.selectAll(".tick line").clone()
-      .attr("stroke-opacity", 0.2)
+      .attr("stroke-opacity", d => d === 1 ? null : 0.2)
       .attr("x2", width - marginLeft - marginRight))
     .call(g => g.select(".domain").remove());
 
@@ -273,18 +276,33 @@ function drawLeftChart(){
     .y(d => yLeft(d.value));
 
   // Draw each series
-  const serieG = svgLeft.append("g")
+  const serieL = svgLeft.append("g")
     .selectAll("g")
     .data(seriesLeft)
-    .join("g");
-
-  serieG.append("path")
+    .join("g")
+    .attr("class", "series-group-left"); 
+  
+  serieL.append("path")
     .attr("fill", "none")
     .attr("stroke-width", 1.5)
     .attr("stroke-linejoin", "round")
     .attr("stroke-linecap", "round")
     .attr("stroke", d => zLeft(d.key))
     .attr("d", d => line(d.values));
+
+  //Label for the moving line
+  serieL.append("text")
+    .datum(d => ({
+      key: d.key,
+      value: d.values[d.values.length - 1].value
+    }))
+    .attr("x", xLeft.range()[1] + 3) 
+    .attr("y", d => yLeft(d.value)) 
+    .attr("dy", "0.35em")
+    .attr("fill", d => zLeft(d.key)) 
+    .attr("stroke", "white")
+    .attr("stroke-width", 3)
+    .text(d => d.key);
 
   // Legend
   const legend = svgLeft.append("g")
@@ -300,30 +318,24 @@ function drawLeftChart(){
   ruleLeft = svgLeft.append("line")
     .attr("y1", marginTop)
     .attr("y2", height - marginBottom)
-    .attr("stroke", "black");
+    .attr("stroke", "black")
+    .attr("class", "rule-left");
 
-  // Mouse interaction to show normalized line
-  svgLeft.on("mousemove touchmove", function(event){
+  bisect = d3.bisector(d => d.Date).left; 
+
+  //Animation
+  d3.transition()
+    .ease(d3.easeCubicOut)
+    .duration(1500)
+    .tween("date", () => {
+      const interp = d3.interpolateDate(xLeft.domain()[1], xLeft.domain()[0]);
+      return t => update(interp(t));
+    });
+
+  //As the mouse moves, normalize the chart to that date
+  svgLeft.on("mousemove touchmove", function(event) {
     const [px] = d3.pointer(event, this);
-    const date = xLeft.invert(px);
-
-    ruleLeft.attr("x1", xLeft(date)).attr("x2", xLeft(date));
-
-    // Move each line's last label vertically (optional)
-    serieG.selectAll("text")
-      .data(seriesLeft)
-      .join("text")
-      .attr("x", xLeft.range()[1] + 3)
-      .attr("y", d => {
-        const bisect = d3.bisector(d => d.Date).left;
-        const i = bisect(d.values, date, 0, d.values.length - 1);
-        return yLeft(d.values[i].value);
-      })
-      .text(d => d.key)
-      .attr("fill", d => zLeft(d.key))
-      .attr("stroke", "white")
-      .attr("stroke-width", 3)
-      .attr("dy", "0.35em");
+    update(xLeft.invert(px));
   });
 }
 
@@ -374,6 +386,29 @@ function updateDataset(type){
   document.getElementById('button_rates').classList.toggle('active', type==='rates');
   document.getElementById('button_actual').classList.toggle('active', type==='actual');
   drawRightChart(type==='rates'?ratesData:levelsData);
+}
+
+function update(date) {
+  // Error check
+  if (!xLeft || !bisect) return; 
+
+  date = d3.utcDay.round(date);
+//update rules for left and right
+  ruleLeft.attr("transform", `translate(${xLeft(date)},0)`);
+
+  if (ruleRight) {
+    ruleRight.attr("transform", `translate(${xRight(date)},0)`); 
+  }
+
+  d3.select("#chart-left").selectAll(".series-group-left")
+    .attr("transform", ({key, values}) => {
+      const i = bisect(values, date, 0, values.length - 1);
+      const v_date = values[i].value; 
+    
+      const shift = yLeft(1) - yLeft(v_date);
+      
+      return `translate(0,${shift})`;
+    });
 }
 
 </script>
