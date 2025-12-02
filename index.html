@@ -67,7 +67,7 @@
 <script>
 
 // load CSV. Convert row into name, date, and value (number)
-d3.csv("clean_bls_long_format.csv", d => ({
+d3.csv("clean_bls_long_format_2.csv", d => ({
   name: d.name.trim(),
   date: new Date(d.date),
   value: +d.value
