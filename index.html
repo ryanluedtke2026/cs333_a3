@@ -40,6 +40,11 @@
       border-radius: 4px;
       cursor: pointer;
     }
+    .tooltip-right {
+    /* Tooltip formatting for left panel numbers display */
+      pointer-events: none;
+      font-size: 12px;
+    }
   </style>
 </head>
 
@@ -95,6 +100,11 @@ let ruleLeft, ruleRight; //lines for following the mouse cursor
 //find nearest data point to mouse. 
   //allows the mouse to follow the x-axis at different vertical y. 
 let bisect; 
+
+// tooltip variables
+let xRight, yRight, zRight; // right chart locations
+let seriesRightGlobal;  // right side series
+let tooltipRight;
 
 
 //DATA LOADING AND CHART INITIALIZATION
@@ -486,11 +496,13 @@ function drawRightChart(data){
         return "Labor Market Flows (Thousands of Workers)";
       }
     });
-  ///series grouped by type of metric (labor metrics)
+  //series grouped by type of metric (labor metrics)
   const seriesRight = d3.groups(data, d=>d.Symbol)
     .map(([key,values])=>({
       key, 
       values}));
+
+  seriesRightGlobal = seriesRight;
 
   //Line for the right-chart
   const lineRight = d3.line()
@@ -551,10 +563,15 @@ function drawRightChart(data){
     .attr("y2", height-marginBottom)
     .attr("stroke","black");
 
-  //Mouse interaction on right screen effects the left graph
-  svgRight.on("mousemove touchmove", function(event) {
-    const [px] = d3.pointer(event, this);       // Get mouse x position in pixels
-    update(xLeft.invert(px));                   // Convert pixels to date and update
+  // Mouse interaction on right screen effects the left graph
+  svgRight
+    .on("mousemove touchmove", function(event) {
+      const [px] = d3.pointer(event, this);
+      const date = xLeft.invert(px);   // use left scale to keep everything aligned
+      update(date);
+    })
+    .on("mouseleave touchend", function() {
+      if (tooltipRight) tooltipRight.style("display", "none");
   });
   
       // Legend
@@ -588,6 +605,22 @@ function drawRightChart(data){
       .attr("font-size", "12px")
       .text(s.key);
   });
+
+  tooltipRight = svgRight.append("g")
+    .attr("class", "tooltip-right")
+    .style("display", "none");
+
+  // styling for tooltip
+  tooltipRight.append("rect")
+    .attr("rx", 4)
+    .attr("ry", 4)
+    .attr("fill", "white")
+    .attr("stroke", "#ccc")
+    .attr("opacity", 0.9);
+
+  tooltipRight.append("text")
+    .attr("fill", "#000")
+    .attr("font-size", 12);
 }
 
 //INTERACTION:
@@ -620,11 +653,19 @@ function update(date) {
   if (!xLeft || !bisect) return; 
 
   date = d3.utcDay.round(date);
+
+  // date within domain
+  const [minDate, maxDate] = xLeft.domain();
+  if (date < minDate || date > maxDate) return;
   
   //update rules for left and right. move line to hovered date (on left) and 
   //move vertical on right chart
-  ruleLeft.attr("transform", `translate(${xLeft(date)},0)`);
-  ruleRight.attr("transform", `translate(${xRight(date)},0)`); 
+  if (ruleLeft) {
+    ruleLeft.attr("transform", `translate(${xLeft(date)},0)`);
+  }
+  if (ruleRight && xRight) {
+    ruleRight.attr("transform", `translate(${xRight(date)},0)`);
+  }
 
   //From example code, transform on left chart, shifting vertically 
   //so hovered date aligns at the y=1 axis.
@@ -637,7 +678,75 @@ function update(date) {
       
       return `translate(0,${shift})`;
     });
+  
+  // update right tooltip's date
+  updateRightTooltip(date);
 }
+
+// function to update date on right tooltip
+function updateRightTooltip(date) {
+  if (!seriesRightGlobal || !xRight || !yRight || !tooltipRight) return;
+
+  const formatDate = d3.utcFormat("%b %Y");
+  const formatRate = d3.format(".1f");
+  const formatLevel = d3.format(",.0f");
+
+  const lines = [];
+
+  // date header
+  lines.push(formatDate(date));
+
+  // hires, job openings, separations data
+  seriesRightGlobal.forEach(series => {
+    const values = series.values;
+    const idx = bisect(values, date, 0, values.length - 1);
+    const d = values[Math.min(idx, values.length - 1)];
+
+    let valStr;
+
+    if (currentData === 'rates') {
+      // Example: 4x
+      valStr = formatRate(d.Rate) + "x";
+    } else {
+      // Level data should be multiplied by 1000
+      valStr = formatLevel(d.Rate * 1000);
+    }
+
+    lines.push(`${series.key}: ${valStr}`);
+  });
+
+  const text = tooltipRight.select("text");
+  text.selectAll("tspan").remove();
+
+  lines.forEach((line, i) => {
+    const t = text.append("tspan")
+      .attr("x", 8)
+      .attr("y", 16 + i * 14)
+      .text(line);
+
+    if (i === 0) { // date component
+      t.attr("font-weight", "bold");
+    }
+  });
+
+  const boxWidth = 170;
+  const boxHeight = 20 + lines.length * 14;
+
+  tooltipRight.select("rect")
+    .attr("width", boxWidth)
+    .attr("height", boxHeight);
+
+  // tooltip near line, inside chart
+  let xPos = xRight(date) + 10;
+  if (xPos + boxWidth > width - marginRight) {
+    xPos = xRight(date) - boxWidth - 10;
+  }
+
+  tooltipRight
+    .style("display", null)
+    .attr("transform", `translate(${xPos},${marginTop})`);
+}
+
 
 </script>
 
